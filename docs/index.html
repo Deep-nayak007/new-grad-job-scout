@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#102f3a">
+  <title>Job Scout · New Grad 2027</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="ambient ambient-one"></div>
+  <div class="ambient ambient-two"></div>
+  <header class="shell topbar">
+    <a class="brand" href="./" aria-label="Job Scout home">
+      <span class="brand-mark">JS</span>
+      <span><strong>Job Scout</strong><small>NEW GRAD · 2027</small></span>
+    </a>
+    <div class="header-actions">
+      <button id="alertButton" class="button ghost"><span class="button-icon">◉</span> Enable alerts</button>
+      <a id="excelButton" class="button ghost" href="/api/export"><span class="button-icon">↓</span> Excel</a>
+      <button id="refreshButton" class="button primary"><span class="refresh-icon">↻</span> Refresh jobs</button>
+    </div>
+  </header>
+
+  <main class="shell">
+    <section class="hero">
+      <div>
+        <p class="eyebrow"><span class="live-dot"></span> YOUR DAILY SEARCH, READY</p>
+        <h1>Find the opening.<br><em>Make your move.</em></h1>
+        <p class="hero-copy">Fresh US software, AI/ML, and data roles for new graduates—cross-checked, deduplicated, and ready to apply.</p>
+      </div>
+      <div class="refresh-card">
+        <div class="refresh-card-top"><span>LAST REFRESH</span><span id="refreshState" class="status-pill">Checking</span></div>
+        <strong id="lastRefresh">Getting the latest roles…</strong>
+        <p id="sourceHealth">Source status will appear here.</p>
+      </div>
+    </section>
+
+    <section class="stats-grid" aria-label="Job statistics">
+      <article><span class="stat-icon mint">⌁</span><div><strong id="totalStat">—</strong><small>Total matches</small></div></article>
+      <article><span class="stat-icon sun">✦</span><div><strong id="todayStat">—</strong><small>Posted today</small></div></article>
+      <article><span class="stat-icon blue">27</span><div><strong id="gradStat">—</strong><small>2027 graduate fit</small></div></article>
+      <article><span class="stat-icon coral">H1</span><div><strong id="visaStat">—</strong><small>Sponsor signals</small></div></article>
+      <article><span class="stat-icon violet">✓</span><div><strong id="appliedStat">—</strong><small>Applications sent</small></div></article>
+    </section>
+
+    <section class="workspace">
+      <div class="section-heading">
+        <div><p class="eyebrow">LIVE OPPORTUNITIES</p><h2>Your job board</h2></div>
+        <p id="resultCount" class="result-count">Loading roles…</p>
+      </div>
+
+      <div class="tab-row" role="tablist">
+        <button class="tab active" data-tab="all">All matches</button>
+        <button class="tab" data-tab="visa">H‑1B sponsorship</button>
+        <button class="tab" data-tab="saved">Saved</button>
+        <button class="tab" data-tab="applied">Applied</button>
+      </div>
+
+      <div class="filters">
+        <label class="search-box"><span>⌕</span><input id="searchInput" type="search" placeholder="Search company, role, or location"></label>
+        <label><span class="sr-only">Category</span><select id="categoryFilter"><option>All</option><option>Software Development</option><option>AI / ML</option><option>Data Science</option></select></label>
+        <label><span class="sr-only">Posted date</span><select id="daysFilter"><option value="all">Any posting date</option><option value="0">Posted today</option><option value="3">Last 3 days</option><option value="7" selected>Last 7 days</option><option value="14">Last 14 days</option><option value="30">Last 30 days</option></select></label>
+        <label class="check-filter"><input id="gradFilter" type="checkbox"><span>2027 fit only</span></label>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Company & role</th><th>Location</th><th>Posted</th><th>Visa signal</th><th>Your status</th><th></th></tr></thead>
+          <tbody id="jobRows"><tr><td colspan="6" class="loading-row"><span class="spinner"></span> Gathering today’s jobs…</td></tr></tbody>
+        </table>
+      </div>
+      <div id="emptyState" class="empty-state" hidden><span>⌕</span><h3>No matching roles</h3><p>Try widening the posting date or clearing one of the filters.</p></div>
+      <button id="loadMore" class="load-more" hidden>Show more roles</button>
+    </section>
+
+    <section class="search-hubs">
+      <div class="section-heading compact"><div><p class="eyebrow">SEARCH EVERYWHERE</p><h2>One-click search hubs</h2></div><p>These open fresh searches directly on each platform.</p></div>
+      <div class="hub-grid">
+        <a href="https://www.linkedin.com/jobs/search/?keywords=new%20grad%202027%20software%20engineer&location=United%20States&f_E=2&f_TPR=r604800" target="_blank" rel="noopener"><span class="hub-logo linkedin">in</span><div><strong>LinkedIn</strong><small>Past week · Entry level</small></div><b>↗</b></a>
+        <a href="https://www.indeed.com/jobs?q=%28new+grad+OR+2027%29+%28software+OR+machine+learning+OR+data+science%29&l=United+States&fromage=7" target="_blank" rel="noopener"><span class="hub-logo indeed">i</span><div><strong>Indeed</strong><small>Past week · United States</small></div><b>↗</b></a>
+        <a href="https://jobright.ai/jobs/recommend" target="_blank" rel="noopener"><span class="hub-logo jobright">J</span><div><strong>Jobright</strong><small>New grad + visa discovery</small></div><b>↗</b></a>
+        <a href="https://simplify.jobs/l/Top-New-Grad" target="_blank" rel="noopener"><span class="hub-logo simplify">S</span><div><strong>Simplify</strong><small>Curated new-grad listings</small></div><b>↗</b></a>
+        <a href="https://github.com/speedyapply/2027-SWE-College-Jobs/blob/main/NEW_GRAD_USA.md" target="_blank" rel="noopener"><span class="hub-logo github">⌘</span><div><strong>GitHub lists</strong><small>SpeedyApply 2027 source</small></div><b>↗</b></a>
+      </div>
+    </section>
+  </main>
+
+  <footer class="shell"><span>Job Scout runs only on your computer.</span><span>Always confirm eligibility and sponsorship on the employer’s application page.</span></footer>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="app.js"></script>
+</body>
+</html>

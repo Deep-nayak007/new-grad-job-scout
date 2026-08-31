@@ -1,0 +1,70 @@
+{
+  "refresh_hour_local": 8,
+  "sources": [
+    {
+      "name": "Keryx 2027",
+      "kind": "markdown",
+      "url": "https://raw.githubusercontent.com/GodlyDonuts/keryx/main/new-grad/2027.md",
+      "homepage": "https://github.com/GodlyDonuts/keryx/blob/main/new-grad/2027.md"
+    },
+    {
+      "name": "SpeedyApply 2027",
+      "kind": "markdown",
+      "url": "https://raw.githubusercontent.com/speedyapply/2027-SWE-College-Jobs/main/NEW_GRAD_USA.md",
+      "homepage": "https://github.com/speedyapply/2027-SWE-College-Jobs/blob/main/NEW_GRAD_USA.md"
+    },
+    {
+      "name": "Simplify New Grad",
+      "kind": "markdown_html",
+      "url": "https://raw.githubusercontent.com/SimplifyJobs/New-Grad-Positions/dev/README.md",
+      "homepage": "https://github.com/SimplifyJobs/New-Grad-Positions/blob/dev/README.md"
+    },
+    {
+      "name": "V's 2027 New Grad",
+      "kind": "markdown",
+      "url": "https://raw.githubusercontent.com/vanshb03/New-Grad-2027/dev/README.md",
+      "homepage": "https://github.com/vanshb03/New-Grad-2027/blob/dev/README.md"
+    },
+    {
+      "name": "Jobright H1B",
+      "kind": "h1b",
+      "url": "https://raw.githubusercontent.com/jobright-ai/Daily-H1B-Jobs-In-Tech/master/README.md",
+      "homepage": "https://github.com/jobright-ai/Daily-H1B-Jobs-In-Tech"
+    },
+    {
+      "name": "ApplyGuy 2027",
+      "kind": "markdown",
+      "url": "https://raw.githubusercontent.com/ApplyGuy/2027-New-Grad-Jobs/main/README.md",
+      "homepage": "https://github.com/ApplyGuy/2027-New-Grad-Jobs"
+    },
+    {
+      "name": "Jobright Software",
+      "kind": "markdown",
+      "url": "https://raw.githubusercontent.com/jobright-ai/2026-Software-Engineer-New-Grad/master/README.md",
+      "homepage": "https://github.com/jobright-ai/2026-Software-Engineer-New-Grad"
+    },
+    {
+      "name": "Jobright Data",
+      "kind": "markdown",
+      "url": "https://raw.githubusercontent.com/jobright-ai/2026-Data-Analysis-New-Grad/master/README.md",
+      "homepage": "https://github.com/jobright-ai/2026-Data-Analysis-New-Grad"
+    },
+    {
+      "name": "Zapply Software 2027",
+      "kind": "markdown_strict",
+      "url": "https://raw.githubusercontent.com/zapplyjobs/New-Grad-Software-Engineering-Jobs-2027/main/README.md",
+      "homepage": "https://github.com/zapplyjobs/New-Grad-Software-Engineering-Jobs-2027"
+    },
+    {
+      "name": "Zapply Data 2027",
+      "kind": "markdown_strict",
+      "url": "https://raw.githubusercontent.com/zapplyjobs/New-Grad-Data-Science-Jobs-2027/main/README.md",
+      "homepage": "https://github.com/zapplyjobs/New-Grad-Data-Science-Jobs-2027"
+    }
+  ],
+  "direct_ats": {
+    "enabled": true,
+    "max_workers": 12,
+    "max_boards_per_platform": 140
+  }
+}
