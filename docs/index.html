@@ -5,6 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#102f3a">
   <title>Job Scout · New Grad 2027</title>
+  <script>
+    try {
+      document.documentElement.dataset.theme = localStorage.getItem("jobScoutTheme") || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+    } catch (_) { document.documentElement.dataset.theme = "light"; }
+  </script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@600;700;800&display=swap" rel="stylesheet">
@@ -19,6 +24,7 @@
       <span><strong>Job Scout</strong><small>NEW GRAD · 2027</small></span>
     </a>
     <div class="header-actions">
+      <button id="themeButton" class="button ghost" aria-pressed="false"><span class="button-icon">◐</span> Dark mode</button>
       <button id="alertButton" class="button ghost"><span class="button-icon">◉</span> Enable alerts</button>
       <a id="excelButton" class="button ghost" href="/api/export"><span class="button-icon">↓</span> Excel</a>
       <button id="refreshButton" class="button primary"><span class="refresh-icon">↻</span> Refresh jobs</button>
@@ -69,8 +75,8 @@
 
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Company & role</th><th>Location</th><th>Posted</th><th>Visa signal</th><th>Your status</th><th></th></tr></thead>
-          <tbody id="jobRows"><tr><td colspan="6" class="loading-row"><span class="spinner"></span> Gathering today’s jobs…</td></tr></tbody>
+          <thead><tr><th>Company & role</th><th>Location</th><th>Source</th><th>Posted</th><th>Visa signal</th><th>Your status</th><th></th></tr></thead>
+          <tbody id="jobRows"><tr><td colspan="7" class="loading-row"><span class="spinner"></span> Gathering today’s jobs…</td></tr></tbody>
         </table>
       </div>
       <div id="emptyState" class="empty-state" hidden><span>⌕</span><h3>No matching roles</h3><p>Try widening the posting date or clearing one of the filters.</p></div>

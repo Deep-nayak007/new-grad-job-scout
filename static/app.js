@@ -4,6 +4,22 @@ let snapshotPromise = null;
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
 
+function applyTheme(theme) {
+  const isDark = theme === "dark";
+  document.documentElement.dataset.theme = isDark ? "dark" : "light";
+  document.querySelector('meta[name="theme-color"]').content = isDark ? "#0b1518" : "#102f3a";
+  const button = $("#themeButton");
+  button.setAttribute("aria-pressed", String(isDark));
+  button.innerHTML = `<span class="button-icon">${isDark ? "☀" : "◐"}</span> ${isDark ? "Light mode" : "Dark mode"}`;
+}
+
+function sourceBadges(job) {
+  const sources = Array.isArray(job.sources) && job.sources.length ? job.sources : ["Employer site"];
+  const visible = sources.slice(0, 2).map(source => `<span class="source-badge">${escapeHtml(source)}</span>`).join("");
+  const remainder = sources.length > 2 ? `<span class="source-more">+${sources.length - 2}</span>` : "";
+  return `<div class="source-list" title="${escapeHtml(sources.join(", "))}">${visible}${remainder}</div>`;
+}
+
 function loadTracker() {
   try { return JSON.parse(localStorage.getItem("jobScoutTracker") || "{}"); } catch { return {}; }
 }
@@ -57,7 +73,7 @@ function filteredJobs() {
   const days = $("#daysFilter").value;
   const gradOnly = $("#gradFilter").checked;
   return state.jobs.filter(job => {
-    if (search && !`${job.company} ${job.title} ${job.location}`.toLowerCase().includes(search)) return false;
+    if (search && !`${job.company} ${job.title} ${job.location} ${(job.sources || []).join(" ")}`.toLowerCase().includes(search)) return false;
     if (category !== "All" && job.category !== category) return false;
     if (gradOnly && !job.grad_2027) return false;
     if (days !== "all") {
@@ -85,6 +101,7 @@ function renderJobs() {
     return `<tr data-id="${job.id}">
       <td class="company-role"><div class="company-line"><span class="company-avatar">${escapeHtml(initials(job.company))}</span><div><strong>${escapeHtml(job.company)}</strong><small>${escapeHtml(job.title)}</small></div></div><span class="category-tag">${escapeHtml(job.category)}${job.grad_2027 ? " · 2027" : ""}</span></td>
       <td class="location-cell">${escapeHtml(job.location || "United States")}</td>
+      <td class="source-cell">${sourceBadges(job)}</td>
       <td class="date-cell"><strong>${escapeHtml(posted.date)}</strong><small>${escapeHtml(posted.age)}</small></td>
       <td>${visaBadge(job)}</td>
       <td><select class="status-select" aria-label="Application status">${options}</select></td>
@@ -194,6 +211,12 @@ $("#refreshButton").addEventListener("click", async () => {
   }
 });
 
+$("#themeButton").addEventListener("click", () => {
+  const theme = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+  localStorage.setItem("jobScoutTheme", theme);
+  applyTheme(theme);
+});
+
 $("#alertButton").addEventListener("click", async () => {
   if (!("Notification" in window)) return showToast("Browser notifications are not available here. macOS alerts still work while the app is running.");
   const permission = await Notification.requestPermission();
@@ -242,6 +265,7 @@ if (STATIC_MODE) {
   $("#excelButton").href = "data/Job_Scout_New_Grad_2027.xlsx";
   $("#refreshButton").innerHTML = '<span class="refresh-icon">↻</span> Check latest';
 }
+applyTheme(document.documentElement.dataset.theme || "light");
 if ("Notification" in window && Notification.permission === "granted") $("#alertButton").textContent = "● Alerts on";
 loadJobs().then(loadStats).then(markVisitAndNotify).catch(error => showToast(`Could not load the app: ${error.message}`));
 setInterval(poll, STATIC_MODE ? 300000 : 30000);
