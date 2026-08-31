@@ -57,5 +57,6 @@ The repository includes `.github/workflows/deploy-pages.yml`. On every push to `
 2. Fetches every curated and direct-ATS source.
 3. Builds `docs/data/jobs.json` and the current Excel workbook.
 4. Publishes `docs/` to GitHub Pages.
+5. On scheduled or manually triggered runs, records a tiny successful-refresh heartbeat so GitHub does not treat the public repository as inactive and disable its schedule.
 
 On the hosted dashboard, saved jobs and application statuses are stored in that browser's local storage. They remain available on later visits from the same browser without putting personal job-search state in the public repository.
