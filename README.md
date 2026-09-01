@@ -4,7 +4,13 @@ Job Scout is a private local job-search dashboard for US full-time software deve
 
 It also includes a cloud build designed for GitHub Pages. GitHub Actions rebuilds the hosted dashboard every day at **8:15 AM Arizona time**, so the permanent URL remains current even when the Mac is off.
 
-## Open the app
+## Open the public website
+
+**[https://deep-nayak007.github.io/new-grad-job-scout/](https://deep-nayak007.github.io/new-grad-job-scout/)**
+
+This is the permanent public URL. It works from any computer or phone and does not require the local Python app, your Mac, or a GitHub login.
+
+## Optional local version
 
 Double-click **Job Scout.app** or **run_job_scout.command** in this folder. Your browser opens at [http://127.0.0.1:8765](http://127.0.0.1:8765).
 
