@@ -2,7 +2,7 @@
 
 Job Scout is a private local job-search dashboard for US full-time software development, AI/ML, and data roles. It refreshes curated public feeds, removes duplicate listings, preserves your application statuses in SQLite, exports a multi-tab Excel workbook, and can notify you when a refresh discovers new jobs.
 
-It also includes a cloud build designed for GitHub Pages. GitHub Actions rebuilds the hosted dashboard every day at **8:15 AM Arizona time**, so the permanent URL remains current even when the Mac is off.
+It also includes a cloud build designed for GitHub Pages. GitHub Actions rebuilds the hosted dashboard every six hours, so the permanent URL remains current even when the Mac is off.
 
 ## Open the public website
 
@@ -33,7 +33,7 @@ The current workbook is always available at `exports/Job_Scout_New_Grad_2027.xls
 
 ## Sources and sponsorship meaning
 
-The main feed cross-checks direct ATS pages with Jobright, Simplify, SpeedyApply, ApplyGuy, Keryx, V's new-grad list, and filtered Zapply feeds. It then discovers the underlying employer boards and queries public **Greenhouse, Lever, and Ashby** posting APIs directly. LinkedIn and Indeed are provided as one-click searches instead of credential-based scraping.
+The main feed cross-checks direct ATS pages with Jobright, Simplify, SpeedyApply, ApplyGuy, Keryx, V's new-grad list, filtered Zapply feeds, and the public 2027 SWE Radar's LinkedIn discoveries. It then discovers and queries employer boards on **Greenhouse, Lever, Ashby, and Deel**. LinkedIn and Indeed are also provided as one-click searches.
 
 Visa labels are leads, not legal conclusions:
 

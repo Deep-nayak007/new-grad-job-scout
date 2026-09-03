@@ -28,7 +28,7 @@ EARLY_MARKERS = (
 )
 ROLE_MARKERS = (
     "software", "developer", "data", "machine learning", "artificial intelligence", " ai ", " ml ",
-    "analytics", "analyst", "computer", "cloud", "devops", "platform", "backend", "front end",
+    "analytics", "business intelligence", "systems analyst", "technology analyst", "computer", "cloud", "devops", "platform", "backend", "front end",
     "frontend", "full stack", "fullstack", "infrastructure", "security engineer", "cyber", "firmware",
     "algorithm", "quant", "site reliability", "sre", "technology", "technical", "database",
 )
@@ -42,6 +42,12 @@ FOREIGN_LOCATIONS = (
 US_STATE_RE = re.compile(
     r"(?:,|\b)(?:AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY|DC)\b",
     re.I,
+)
+US_CITY_MARKERS = (
+    "atlanta", "austin", "baltimore", "boston", "charlotte", "chicago", "dallas", "denver",
+    "detroit", "houston", "los angeles", "miami", "new york", "philadelphia", "phoenix",
+    "pittsburgh", "portland", "raleigh", "san diego", "san francisco", "san jose", "seattle",
+    "silicon valley", "washington dc", "washington, dc",
 )
 AGGREGATOR_HOSTS = ("applyguy.ai", "jobright.ai", "simplify.jobs", "app.zapply.jobs", "newgrad-jobs.com")
 
@@ -197,6 +203,7 @@ def is_us_location(location: str) -> bool:
     return bool(
         US_STATE_RE.search(location)
         or any(marker in value for marker in ("united states", "u.s.", "usa", "multiple u.s", "remote"))
+        or any(marker in value for marker in US_CITY_MARKERS)
         or value in {"us", "united states of america"}
     )
 
@@ -208,7 +215,7 @@ def looks_2027(title: str, eligibility: str, source: str) -> bool:
 
 def company_key(company: str) -> str:
     value = re.sub(r"[^a-z0-9]+", " ", company.lower())
-    for suffix in (" incorporated", " corporation", " technologies", " technology", " inc", " llc", " ltd", " company"):
+    for suffix in (" incorporated", " corporation", " technologies", " technology", " solutions", " inc", " llc", " ltd", " company"):
         value = value.replace(suffix, "")
     return re.sub(r"\s+", " ", value).strip()
 
@@ -469,8 +476,99 @@ def ats_job(
     }
 
 
+def parse_radar_jobs(text: str, source: dict[str, Any]) -> list[dict[str, Any]]:
+    data = json.loads(text)
+    if not isinstance(data, list):
+        raise ValueError("Radar feed must contain a JSON list")
+    included = {str(value).lower() for value in source.get("include_sources", [])}
+    jobs = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        origin = clean_text(str(item.get("source", ""))) or source["name"]
+        if included and origin.lower() not in included:
+            continue
+        locations = item.get("locations", "")
+        location = " • ".join(clean_text(str(value)) for value in locations) if isinstance(locations, list) else clean_text(str(locations))
+        source_name = f"{origin} via {source['name']}" if origin.lower() != source["name"].lower() else source["name"]
+        candidate = ats_job(
+            company=clean_text(str(item.get("company", ""))),
+            title=clean_text(str(item.get("title", ""))),
+            location=location,
+            url=str(item.get("url", "")),
+            published=item.get("posted"),
+            description="",
+            source_name=source_name,
+        )
+        if not candidate:
+            continue
+        candidate["source_detail"] = "Public early-career discovery feed"
+        sponsorship = clean_text(str(item.get("sponsorship", ""))).lower()
+        if "citizenship" in sponsorship or "does not sponsor" in sponsorship:
+            candidate["visa_status"] = "No / restricted"
+            candidate["visa_evidence"] = "The discovery feed marks this listing as requiring U.S. citizenship or not sponsoring. Verify with the employer."
+        jobs.append(candidate)
+    return jobs
+
+
+def json_ld_objects(text: str) -> list[dict[str, Any]]:
+    objects: list[dict[str, Any]] = []
+    pattern = re.compile(r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>', re.I | re.S)
+    for match in pattern.finditer(text):
+        try:
+            value = json.loads(html.unescape(match.group(1)))
+        except (json.JSONDecodeError, TypeError):
+            continue
+        candidates = value if isinstance(value, list) else [value]
+        objects.extend(item for item in candidates if isinstance(item, dict))
+    return objects
+
+
+def deel_location(posting: dict[str, Any]) -> str:
+    locations = posting.get("jobLocation") or []
+    if isinstance(locations, dict):
+        locations = [locations]
+    values = []
+    for location in locations:
+        address = location.get("address", {}) if isinstance(location, dict) else {}
+        if isinstance(address, str):
+            values.append(address)
+            continue
+        parts = [address.get(key) for key in ("addressLocality", "addressRegion", "addressCountry") if address.get(key)]
+        if parts:
+            values.append(", ".join(dict.fromkeys(map(str, parts))))
+    return " • ".join(dict.fromkeys(values))
+
+
+def parse_deel_job_page(text: str, url: str, fallback_company: str) -> list[dict[str, Any]]:
+    jobs = []
+    for posting in json_ld_objects(text):
+        posting_type = posting.get("@type", "")
+        posting_types = posting_type if isinstance(posting_type, list) else [posting_type]
+        if "JobPosting" not in posting_types:
+            continue
+        employment = posting.get("employmentType") or []
+        employment_text = " ".join(map(str, employment)) if isinstance(employment, list) else str(employment)
+        if employment_text and "full" not in employment_text.lower():
+            continue
+        organization = posting.get("hiringOrganization") or {}
+        company = organization.get("name", "") if isinstance(organization, dict) else ""
+        candidate = ats_job(
+            company=company or fallback_company,
+            title=str(posting.get("title", "")),
+            location=deel_location(posting),
+            url=str(posting.get("url") or url),
+            published=posting.get("datePosted"),
+            description=str(posting.get("description", "")),
+            source_name="Deel Direct",
+        )
+        if candidate:
+            jobs.append(candidate)
+    return jobs
+
+
 def discover_ats_boards(jobs: list[dict[str, Any]]) -> dict[str, dict[str, str]]:
-    boards: dict[str, dict[str, Counter[str]]] = {"greenhouse": {}, "lever": {}, "ashby": {}}
+    boards: dict[str, dict[str, Counter[str]]] = {"greenhouse": {}, "lever": {}, "ashby": {}, "deel": {}}
     for job in jobs:
         parsed = urllib.parse.urlsplit(job["url"])
         parts = [urllib.parse.unquote(part) for part in parsed.path.split("/") if part]
@@ -484,6 +582,8 @@ def discover_ats_boards(jobs: list[dict[str, Any]]) -> dict[str, dict[str, str]]
             kind, token = "lever", parts[0]
         elif parsed.netloc.lower() == "jobs.ashbyhq.com" and parts:
             kind, token = "ashby", parts[0]
+        elif parsed.netloc.lower() == "jobs.deel.com" and parts:
+            kind, token = "deel", parts[0]
         if kind and token:
             boards[kind].setdefault(token, Counter())[job["company"]] += 1
     return {
@@ -549,14 +649,39 @@ def fetch_ashby_board(token: str, fallback_company: str) -> list[dict[str, Any]]
     return jobs
 
 
+def fetch_deel_board(token: str, fallback_company: str) -> list[dict[str, Any]]:
+    encoded = urllib.parse.quote(token, safe="-")
+    board_text = fetch_text(f"https://jobs.deel.com/{encoded}")
+    objects = json_ld_objects(board_text)
+    organization = next((item for item in objects if item.get("@type") == "Organization"), {})
+    company = clean_text(str(organization.get("name", ""))) or fallback_company
+    listing = next((item for item in objects if item.get("@type") == "ItemList"), {})
+    urls = []
+    for item in listing.get("itemListElement", []):
+        if not isinstance(item, dict):
+            continue
+        nested = item.get("item") or {}
+        url = item.get("url") or (nested.get("url") if isinstance(nested, dict) else "")
+        if url:
+            urls.append(str(url))
+    jobs = []
+    for url in dict.fromkeys(urls):
+        jobs.extend(parse_deel_job_page(fetch_text(url), url, company))
+    return jobs
+
+
 def fetch_direct_ats(curated_jobs: list[dict[str, Any]], settings: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]:
     boards = discover_ats_boards(curated_jobs)
+    for seed in settings.get("deel_boards", []):
+        token = clean_text(str(seed.get("slug", "")))
+        if token:
+            boards["deel"].setdefault(token, clean_text(str(seed.get("company", token))))
     max_boards = int(settings.get("max_boards_per_platform", 140))
     tasks = []
     for kind, tokens in boards.items():
         for token, company in list(tokens.items())[:max_boards]:
             tasks.append((kind, token, company))
-    fetchers = {"greenhouse": fetch_greenhouse_board, "lever": fetch_lever_board, "ashby": fetch_ashby_board}
+    fetchers = {"greenhouse": fetch_greenhouse_board, "lever": fetch_lever_board, "ashby": fetch_ashby_board, "deel": fetch_deel_board}
     jobs: list[dict[str, Any]] = []
     summaries = {kind: {"status": "ok", "jobs": 0, "boards": 0, "errors": 0} for kind in fetchers}
     with ThreadPoolExecutor(max_workers=int(settings.get("max_workers", 12))) as executor:
@@ -572,7 +697,7 @@ def fetch_direct_ats(curated_jobs: list[dict[str, Any]], settings: dict[str, Any
                 summaries[kind]["jobs"] += len(found)
             except Exception:
                 summaries[kind]["errors"] += 1
-    labels = {"greenhouse": "Greenhouse Direct", "lever": "Lever Direct", "ashby": "Ashby Direct"}
+    labels = {"greenhouse": "Greenhouse Direct", "lever": "Lever Direct", "ashby": "Ashby Direct", "deel": "Deel Direct"}
     results = {}
     for kind, summary in summaries.items():
         if summary["boards"] and summary["errors"] == summary["boards"]:
@@ -581,25 +706,70 @@ def fetch_direct_ats(curated_jobs: list[dict[str, Any]], settings: dict[str, Any
     return jobs, results
 
 
+def listing_title_key(title: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", title.lower()).strip()
+
+
+def listing_location_keys(location: str) -> set[str]:
+    value = location.lower()
+    keys = {f"city:{city}" for city in US_CITY_MARKERS if city in value}
+    keys.update(f"state:{match.group(0).strip(', ').upper()}" for match in US_STATE_RE.finditer(location))
+    if "remote" in value:
+        keys.add("remote")
+    return keys or {re.sub(r"[^a-z0-9]+", " ", value).strip()}
+
+
+def same_listing(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    if listing_title_key(left["title"]) != listing_title_key(right["title"]):
+        return False
+    left_company, right_company = company_key(left["company"]), company_key(right["company"])
+    if not left_company or not right_company or not (left_company in right_company or right_company in left_company):
+        return False
+    return bool(listing_location_keys(left.get("location", "")) & listing_location_keys(right.get("location", "")))
+
+
+def is_aggregator_url(url: str) -> bool:
+    host = urllib.parse.urlsplit(url).netloc.lower()
+    return "linkedin.com" in host or any(aggregator in host for aggregator in AGGREGATOR_HOSTS)
+
+
+def merge_job_fields(existing: dict[str, Any], job: dict[str, Any], visa_rank: dict[str, int]) -> None:
+    sources = sorted(set(existing["sources"] + job["sources"]))
+    details = [value for value in (existing.get("source_detail"), job.get("source_detail")) if value]
+    if is_aggregator_url(existing["url"]) and not is_aggregator_url(job["url"]):
+        for key in ("company", "title", "location", "url", "salary", "category"):
+            existing[key] = job.get(key, existing.get(key))
+    existing["sources"] = sources
+    existing["source_detail"] = " • ".join(dict.fromkeys(details))
+    existing["grad_2027"] = existing["grad_2027"] or job["grad_2027"]
+    if not existing.get("salary") and job.get("salary"):
+        existing["salary"] = job["salary"]
+    if not existing.get("posted_date") or (job.get("posted_date") and job["posted_date"] > existing["posted_date"]):
+        existing["posted_date"] = job.get("posted_date")
+        existing["age_text"] = job.get("age_text", "")
+    if visa_rank.get(job["visa_status"], 0) > visa_rank.get(existing["visa_status"], 0):
+        existing["visa_status"] = job["visa_status"]
+        existing["visa_evidence"] = job["visa_evidence"]
+
+
 def merge_jobs(jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    merged: dict[str, dict[str, Any]] = {}
+    merged: list[dict[str, Any]] = []
+    by_id: dict[str, dict[str, Any]] = {}
+    by_title: dict[str, list[dict[str, Any]]] = {}
     visa_rank = {"Unknown": 0, "No / restricted": 1, "Likely — history": 2, "Yes — explicit": 3}
     for job in jobs:
-        existing = merged.get(job["id"])
+        existing = by_id.get(job["id"])
         if not existing:
-            merged[job["id"]] = job
+            existing = next((candidate for candidate in by_title.get(listing_title_key(job["title"]), []) if same_listing(candidate, job)), None)
+        if not existing:
+            merged.append(job)
+            by_id[job["id"]] = job
+            by_title.setdefault(listing_title_key(job["title"]), []).append(job)
             continue
-        existing["sources"] = sorted(set(existing["sources"] + job["sources"]))
-        details = [value for value in (existing.get("source_detail"), job.get("source_detail")) if value]
-        existing["source_detail"] = " • ".join(dict.fromkeys(details))
-        existing["grad_2027"] = existing["grad_2027"] or job["grad_2027"]
-        if not existing.get("posted_date") or (job.get("posted_date") and job["posted_date"] > existing["posted_date"]):
-            existing["posted_date"] = job.get("posted_date")
-            existing["age_text"] = job.get("age_text", "")
-        if visa_rank.get(job["visa_status"], 0) > visa_rank.get(existing["visa_status"], 0):
-            existing["visa_status"] = job["visa_status"]
-            existing["visa_evidence"] = job["visa_evidence"]
-    return list(merged.values())
+        merge_job_fields(existing, job, visa_rank)
+    for job in merged:
+        job["id"] = make_id(job["url"], job["company"], job["title"], job["location"])
+    return merged
 
 
 def fetch_all(sources: list[dict[str, Any]], direct_ats: dict[str, Any] | None = None) -> FetchResult:
@@ -611,10 +781,13 @@ def fetch_all(sources: list[dict[str, Any]], direct_ats: dict[str, Any] | None =
     for source in ordered:
         try:
             text = fetch_text(source["url"])
-            rows = parse_pipe_rows(text)
-            if source["kind"] == "markdown_html":
-                rows.extend(parse_html_rows(text))
-            parsed = [job for row in rows if (job := normalize_row(row, source))]
+            if source["kind"] == "json_radar":
+                parsed = parse_radar_jobs(text, source)
+            else:
+                rows = parse_pipe_rows(text)
+                if source["kind"] == "markdown_html":
+                    rows.extend(parse_html_rows(text))
+                parsed = [job for row in rows if (job := normalize_row(row, source))]
             all_jobs.extend(parsed)
             if source["kind"] == "h1b":
                 for job in parsed:

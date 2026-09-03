@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
   schedule:
-    - cron: "15 15 * * *"
+    - cron: "17 2,8,14,20 * * *"
   workflow_dispatch:
 
 permissions:
@@ -46,9 +46,22 @@ jobs:
       - name: Record successful refresh heartbeat
         if: github.event_name != 'push'
         run: |
-          date -u +"%Y-%m-%dT%H:%M:%SZ" > .github/job-scout-last-refresh
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add .github/job-scout-last-refresh
-          git commit -m "chore: record daily refresh [skip ci]"
-          git push
+          python - <<'PY'
+          from datetime import datetime, timezone, timedelta
+          from pathlib import Path
+          path = Path(".github/job-scout-last-refresh")
+          now = datetime.now(timezone.utc)
+          try:
+              previous = datetime.fromisoformat(path.read_text().strip().replace("Z", "+00:00"))
+          except (OSError, ValueError):
+              previous = now - timedelta(days=31)
+          if now - previous >= timedelta(days=30):
+              path.write_text(now.isoformat(timespec="seconds").replace("+00:00", "Z") + "\n")
+          PY
+          if ! git diff --quiet -- .github/job-scout-last-refresh; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add .github/job-scout-last-refresh
+            git commit -m "chore: record refresh heartbeat [skip ci]"
+            git push
+          fi
