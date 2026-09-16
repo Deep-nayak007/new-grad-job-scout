@@ -1,5 +1,11 @@
 const STATIC_MODE = location.hostname.endsWith("github.io") || location.protocol === "file:" || new URLSearchParams(location.search).has("static") || Boolean(window.JOB_SCOUT_STATIC);
-const state = { jobs: [], visible: 50, tab: "all", loading: true, lastRefreshId: Number(localStorage.getItem("lastRefreshId") || 0), loadedDataRefreshId: 0 };
+const state = {
+  jobs: [], visible: 50, tab: "all", loading: true,
+  lastRefreshId: Number(localStorage.getItem("lastRefreshId") || 0),
+  loadedDataRefreshId: 0,
+  lastVisitAt: localStorage.getItem("jobScoutLastVisit") || "",
+  initialLoad: true,
+};
 let snapshotPromise = null;
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
@@ -35,6 +41,12 @@ function getSnapshot(force = false) {
   return snapshotPromise;
 }
 
+async function getStaticMeta() {
+  const response = await fetch(`data/meta.json?t=${Date.now()}`, {cache: "no-store"});
+  if (!response.ok) throw new Error("The cloud refresh status is unavailable");
+  return response.json();
+}
+
 function escapeHtml(value = "") {
   return String(value).replace(/[&<>'"]/g, char => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"}[char]));
 }
@@ -60,6 +72,13 @@ function initials(company) {
   return company.split(/\s+/).slice(0, 2).map(word => word[0]).join("").toUpperCase();
 }
 
+function isNewSinceVisit(job) {
+  if (!state.lastVisitAt || !job.first_seen) return false;
+  const firstSeen = new Date(job.first_seen).getTime();
+  const lastVisit = new Date(state.lastVisitAt).getTime();
+  return Number.isFinite(firstSeen) && Number.isFinite(lastVisit) && firstSeen > lastVisit;
+}
+
 function visaBadge(job) {
   const value = job.visa_status || "Unknown";
   const css = value.startsWith("Yes") ? "yes" : value.startsWith("Likely") ? "likely" : value.startsWith("No") ? "no" : "unknown";
@@ -82,6 +101,7 @@ function filteredJobs() {
       if (new Date(`${job.posted_date}T12:00:00`) < since) return false;
     }
     if (state.tab === "visa" && !(job.visa_status.startsWith("Yes") || job.visa_status.startsWith("Likely"))) return false;
+    if (state.tab === "new" && !isNewSinceVisit(job)) return false;
     if (state.tab === "saved" && !job.saved) return false;
     if (state.tab === "applied" && job.status !== "Applied") return false;
     return true;
@@ -95,11 +115,14 @@ function renderJobs() {
   $("#emptyState").hidden = jobs.length !== 0;
   $(".table-wrap").hidden = jobs.length === 0;
   $("#loadMore").hidden = jobs.length <= state.visible;
+  const newCount = state.jobs.filter(isNewSinceVisit).length;
+  $("#newTabCount").textContent = newCount ? ` (${newCount.toLocaleString()})` : "";
   $("#jobRows").innerHTML = shown.map(job => {
     const posted = prettyDate(job.posted_date);
+    const isNew = isNewSinceVisit(job);
     const options = ["Not applied", "Applied", "Interviewing", "Offer", "Rejected"].map(value => `<option${job.status === value ? " selected" : ""}>${value}</option>`).join("");
-    return `<tr data-id="${job.id}">
-      <td class="company-role"><div class="company-line"><span class="company-avatar">${escapeHtml(initials(job.company))}</span><div><strong>${escapeHtml(job.company)}</strong><small>${escapeHtml(job.title)}</small></div></div><span class="category-tag">${escapeHtml(job.category)}${job.grad_2027 ? " · 2027" : ""}</span></td>
+    return `<tr data-id="${job.id}" class="${isNew ? "new-job" : ""}">
+      <td class="company-role"><div class="company-line"><span class="company-avatar">${escapeHtml(initials(job.company))}</span><div><strong>${escapeHtml(job.company)}${isNew ? '<span class="new-badge">NEW</span>' : ""}</strong><small>${escapeHtml(job.title)}</small></div></div><span class="category-tag">${escapeHtml(job.category)}${job.grad_2027 ? " · 2027" : ""}</span></td>
       <td class="location-cell">${escapeHtml(job.location || "United States")}</td>
       <td class="source-cell">${sourceBadges(job)}</td>
       <td class="date-cell"><strong>${escapeHtml(posted.date)}</strong><small>${escapeHtml(posted.age)}</small></td>
@@ -132,6 +155,7 @@ async function loadJobs(force = false) {
     const data = await response.json();
     jobs = data.jobs;
   }
+  jobs.sort((left, right) => Number(isNewSinceVisit(right)) - Number(isNewSinceVisit(left)));
   state.jobs = jobs;
   state.loading = false;
   renderJobs();
@@ -165,19 +189,23 @@ async function loadStats() {
   const running = data.refresh.running;
   const dataChanged = Boolean(latest?.id && latest.status === "completed" && latest.id !== state.loadedDataRefreshId);
   if (latest?.id && latest.status === "completed") state.loadedDataRefreshId = latest.id;
-  $("#lastRefresh").textContent = running ? "Checking sources now…" : refreshDescription(latest);
-  $("#refreshState").textContent = running ? "Refreshing" : latest?.status === "failed" ? "Needs attention" : "Up to date";
-  $("#refreshState").className = `status-pill ${running ? "running" : latest?.status === "failed" ? "error" : ""}`;
-  $("#refreshButton").classList.toggle("refreshing", running);
-  $("#refreshButton").disabled = running;
   const results = latest?.source_results || {};
   const healthy = Object.values(results).filter(item => item.status === "ok").length;
+  const degraded = Object.values(results).filter(item => item.status === "degraded").length;
+  const failed = Object.keys(results).length - healthy - degraded;
+  const hasSourceIssues = degraded > 0 || failed > 0;
+  $("#lastRefresh").textContent = running ? "Checking sources now…" : refreshDescription(latest);
+  $("#refreshState").textContent = running ? "Refreshing" : latest?.status === "failed" ? "Needs attention" : hasSourceIssues ? "Partially degraded" : "Up to date";
+  $("#refreshState").className = `status-pill ${running ? "running" : latest?.status === "failed" ? "error" : hasSourceIssues ? "warning" : ""}`;
+  $("#refreshButton").classList.toggle("refreshing", running);
+  $("#refreshButton").disabled = running;
   const total = Object.keys(results).length;
-  $("#sourceHealth").textContent = total ? `${healthy} of ${total} feed groups healthy · Excel updated automatically` : "Building your first job index…";
+  const issueText = [degraded ? `${degraded} degraded` : "", failed ? `${failed} unavailable` : ""].filter(Boolean).join(" · ");
+  $("#sourceHealth").textContent = total ? `${healthy} of ${total} feed groups healthy${issueText ? ` · ${issueText}` : ""} · Excel updated automatically` : "Building your first job index…";
   if (latest?.id && latest.id > state.lastRefreshId && latest.status === "completed") {
     localStorage.setItem("lastRefreshId", latest.id);
     state.lastRefreshId = latest.id;
-    if (latest.discovered_count > 0) notifyNewJobs(latest.discovered_count);
+    if (!state.initialLoad && latest.discovered_count > 0) notifyNewJobs(latest.discovered_count);
   }
   return running || dataChanged;
 }
@@ -190,8 +218,16 @@ function notifyNewJobs(count) {
 
 async function poll() {
   try {
+    if (STATIC_MODE) {
+      const meta = await getStaticMeta();
+      if (meta.refresh?.id && meta.refresh.id !== state.loadedDataRefreshId) {
+        await loadJobs(true);
+        await loadStats();
+      }
+      return;
+    }
     const wasRunning = await loadStats();
-    if (wasRunning || state.loading) await loadJobs(STATIC_MODE);
+    if (wasRunning || state.loading) await loadJobs(false);
   } catch (error) { console.error(error); }
 }
 
@@ -251,14 +287,16 @@ $("#jobRows").addEventListener("click", async event => {
 });
 
 async function markVisitAndNotify() {
-  if (!STATIC_MODE) return;
-  const previous = localStorage.getItem("jobScoutLastVisit");
-  if (previous && "Notification" in window && Notification.permission === "granted") {
-    const previousDate = previous.slice(0, 10);
-    const count = state.jobs.filter(job => job.posted_date && job.posted_date > previousDate).length;
+  if (!STATIC_MODE) {
+    state.initialLoad = false;
+    return;
+  }
+  if (state.lastVisitAt && "Notification" in window && Notification.permission === "granted") {
+    const count = state.jobs.filter(isNewSinceVisit).length;
     if (count) notifyNewJobs(count);
   }
   localStorage.setItem("jobScoutLastVisit", new Date().toISOString());
+  state.initialLoad = false;
 }
 
 if (STATIC_MODE) {

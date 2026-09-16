@@ -31,9 +31,26 @@ jobs:
         with:
           python-version: "3.12"
       - name: Run tests
-        run: python -m unittest discover -s tests -v
+        run: |
+          python -m unittest discover -s tests -v
+          node --check static/app.js
       - name: Fetch current jobs and build site
         run: python -m job_scout.build_static
+      - name: Verify generated dashboard
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          jobs = json.loads(Path("docs/data/jobs.json").read_text())
+          meta = json.loads(Path("docs/data/meta.json").read_text())
+          assert jobs["jobs"], "dashboard has no jobs"
+          assert jobs["refresh"]["id"] == meta["refresh"]["id"], "metadata is out of sync"
+          workday = jobs["refresh"]["source_results"].get("Workday Direct", {})
+          assert workday.get("boards", 0) >= 1, "no Workday boards were checked"
+          assert workday.get("status") != "error", "every Workday board failed"
+          print(f"Verified {len(jobs['jobs']):,} jobs and {workday['boards']} Workday boards.")
+          PY
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v6
       - name: Upload dashboard

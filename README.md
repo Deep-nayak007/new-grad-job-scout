@@ -2,7 +2,7 @@
 
 Job Scout is a private local job-search dashboard for US full-time software development, AI/ML, and data roles. It refreshes curated public feeds, removes duplicate listings, preserves your application statuses in SQLite, exports a multi-tab Excel workbook, and can notify you when a refresh discovers new jobs.
 
-It also includes a cloud build designed for GitHub Pages. GitHub Actions rebuilds the hosted dashboard every six hours, so the permanent URL remains current even when the Mac is off.
+It also includes a cloud build designed for GitHub Pages. GitHub Actions rebuilds the hosted dashboard four times per day, so the permanent URL remains current even when the Mac is off.
 
 ## Open the public website
 
@@ -23,6 +23,8 @@ No package installation, login, API key, or résumé upload is required. The app
 - While the app is open, it checks once per minute and refreshes after 8:00 AM if it has not refreshed that day.
 - Opening it after more than six hours also starts a refresh.
 - Click **Enable alerts** once in the dashboard for browser notifications. macOS notifications are also sent when a refresh finds new jobs.
+- The hosted dashboard checks a lightweight refresh marker every five minutes while it is open. The **New since last visit** tab uses preserved discovery times, including for jobs found after their original posting date.
+- Browser notifications require the website to be open; the scheduled cloud refresh itself continues when the browser and Mac are off.
 - To refresh the workbook every day even when the app is closed, run `scripts/install_daily_refresh.sh` once. It installs a per-user macOS LaunchAgent for 8:00 AM.
 
 The current workbook is always available at `exports/Job_Scout_New_Grad_2027.xlsx` and from the **Excel** button. It contains:
@@ -33,12 +35,13 @@ The current workbook is always available at `exports/Job_Scout_New_Grad_2027.xls
 
 ## Sources and sponsorship meaning
 
-The main feed cross-checks direct ATS pages with Jobright, Simplify, SpeedyApply, ApplyGuy, Keryx, V's new-grad list, filtered Zapply feeds, and the public 2027 SWE Radar's LinkedIn discoveries. It then discovers and queries employer boards on **Greenhouse, Lever, Ashby, and Deel**. LinkedIn and Indeed are also provided as one-click searches.
+The main feed cross-checks direct ATS pages with Jobright, Simplify, SpeedyApply, ApplyGuy, Keryx, V's new-grad list, filtered Zapply feeds, and the public 2027 SWE Radar's LinkedIn discoveries. It then discovers and queries employer boards on **Workday, Greenhouse, Lever, Ashby, and Deel**. Micron's Workday board is explicitly monitored so coverage does not depend on a community list finding it first. LinkedIn and Indeed are also provided as one-click searches.
 
 Visa labels are leads, not legal conclusions:
 
 - **Explicit** means Jobright reports that the job description mentions H-1B sponsorship.
 - **Likely** means the employer/category has recent sponsorship history.
+- **Likely — third-party** means a named external visa-job source claims sponsorship, while the employer posting does not confirm it.
 - **Unknown** means the available feed does not establish sponsorship.
 - **Restricted** means the source marks the job as not sponsoring or requiring US citizenship/work authorization.
 
@@ -57,7 +60,7 @@ Data lives in `data/job_scout.db`. Your saved/application status and notes survi
 
 ## Cloud deployment
 
-The repository includes `.github/workflows/deploy-pages.yml`. On every push to `main`, on a daily schedule, or from the **Run workflow** button, it:
+The repository includes `.github/workflows/deploy-pages.yml`. On every push to `main`, four scheduled runs per day, or from the **Run workflow** button, it:
 
 1. Runs the parser/export tests.
 2. Fetches every curated and direct-ATS source.

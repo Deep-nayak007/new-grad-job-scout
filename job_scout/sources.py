@@ -5,6 +5,7 @@ import html
 import json
 import re
 import ssl
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -49,7 +50,13 @@ US_CITY_MARKERS = (
     "pittsburgh", "portland", "raleigh", "san diego", "san francisco", "san jose", "seattle",
     "silicon valley", "washington dc", "washington, dc",
 )
-AGGREGATOR_HOSTS = ("applyguy.ai", "jobright.ai", "simplify.jobs", "app.zapply.jobs", "newgrad-jobs.com")
+AGGREGATOR_HOSTS = ("applyguy.ai", "jobright.ai", "simplify.jobs", "zapply.jobs", "newgrad-jobs.com")
+WORKDAY_HOST_SUFFIX = ".myworkdayjobs.com"
+# Workday caps pages at 20. One current page plus one page for each targeted
+# phrase gives broad daily coverage without crawling entire enterprise boards.
+WORKDAY_RECENT_LIMIT = 20
+WORKDAY_TARGETED_LIMIT = 20
+WORKDAY_SEARCH_TERMS = ("new college grad", "new grad", "early career", "entry level", "2027")
 
 
 @dataclass
@@ -84,6 +91,7 @@ def extract_links(value: str) -> list[str]:
 def canonical_url(url: str) -> str:
     url = html.unescape(url.strip())
     parsed = urllib.parse.urlsplit(url)
+    host = parsed.netloc.lower()
     query = []
     for key, value in urllib.parse.parse_qsl(parsed.query, keep_blank_values=True):
         key_lower = key.lower()
@@ -91,7 +99,13 @@ def canonical_url(url: str) -> str:
             continue
         query.append((key, value))
     path = parsed.path.rstrip("/") or "/"
-    return urllib.parse.urlunsplit((parsed.scheme.lower(), parsed.netloc.lower(), path, urllib.parse.urlencode(query), ""))
+    if host == "jobs.ashbyhq.com" and path.lower().endswith("/application"):
+        path = path[: -len("/application")]
+        query = [(key, value) for key, value in query if key.lower() != "embed"]
+    if host == "jobs.lever.co" and path.lower().endswith("/apply"):
+        path = path[: -len("/apply")]
+    scheme = "https" if host.endswith("applytojob.com") else parsed.scheme.lower()
+    return urllib.parse.urlunsplit((scheme, host, path, urllib.parse.urlencode(query), ""))
 
 
 def make_id(url: str, company: str, title: str, location: str) -> str:
@@ -415,6 +429,31 @@ def fetch_json(url: str, timeout: int = 25) -> Any:
     return json.loads(fetch_text(url, timeout=timeout))
 
 
+def post_json(url: str, payload: dict[str, Any], timeout: int = 25) -> Any:
+    for attempt in range(3):
+        request = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "User-Agent": "JobScout/1.0 (+local personal job tracker)",
+                "Accept": "application/json,*/*",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        context = ssl.create_default_context()
+        try:
+            with urllib.request.urlopen(request, timeout=timeout, context=context) as response:
+                return json.loads(response.read().decode("utf-8", errors="replace"))
+        except urllib.error.HTTPError as exc:
+            retryable = exc.code == 429 or 500 <= exc.code < 600
+            exc.close()
+            if not retryable or attempt == 2:
+                raise
+            time.sleep(0.75 * (attempt + 1))
+    raise RuntimeError("JSON request retry loop exited unexpectedly")
+
+
 def parse_iso_date(value: Any) -> str | None:
     if value in (None, ""):
         return None
@@ -567,8 +606,38 @@ def parse_deel_job_page(text: str, url: str, fallback_company: str) -> list[dict
     return jobs
 
 
+def workday_board_from_url(url: str) -> tuple[str, str, str] | None:
+    parsed = urllib.parse.urlsplit(url)
+    host = parsed.netloc.lower().split(":", 1)[0]
+    if not host.endswith(WORKDAY_HOST_SUFFIX):
+        return None
+    parts = [urllib.parse.unquote(part) for part in parsed.path.split("/") if part]
+    try:
+        job_index = next(index for index, part in enumerate(parts) if part.lower() == "job")
+    except StopIteration:
+        return None
+    if job_index < 1:
+        return None
+    tenant = host.split(".", 1)[0]
+    site = parts[job_index - 1].lower()
+    if not tenant or not site or re.fullmatch(r"[a-z]{2}[-_][a-z]{2}", site):
+        return None
+    return host, tenant, site
+
+
+def encode_workday_board(host: str, tenant: str, site: str) -> str:
+    return "\t".join((host.lower(), tenant, site.lower()))
+
+
+def decode_workday_board(token: str) -> tuple[str, str, str]:
+    host, tenant, site = token.split("\t", 2)
+    return host, tenant, site
+
+
 def discover_ats_boards(jobs: list[dict[str, Any]]) -> dict[str, dict[str, str]]:
-    boards: dict[str, dict[str, Counter[str]]] = {"greenhouse": {}, "lever": {}, "ashby": {}, "deel": {}}
+    boards: dict[str, dict[str, Counter[str]]] = {
+        "greenhouse": {}, "lever": {}, "ashby": {}, "deel": {}, "workday": {},
+    }
     for job in jobs:
         parsed = urllib.parse.urlsplit(job["url"])
         parts = [urllib.parse.unquote(part) for part in parsed.path.split("/") if part]
@@ -584,6 +653,10 @@ def discover_ats_boards(jobs: list[dict[str, Any]]) -> dict[str, dict[str, str]]
             kind, token = "ashby", parts[0]
         elif parsed.netloc.lower() == "jobs.deel.com" and parts:
             kind, token = "deel", parts[0]
+        else:
+            workday = workday_board_from_url(job["url"])
+            if workday:
+                kind, token = "workday", encode_workday_board(*workday)
         if kind and token:
             boards[kind].setdefault(token, Counter())[job["company"]] += 1
     return {
@@ -670,38 +743,161 @@ def fetch_deel_board(token: str, fallback_company: str) -> list[dict[str, Any]]:
     return jobs
 
 
+def fetch_workday_board(token: str, fallback_company: str) -> list[dict[str, Any]]:
+    host, tenant, site = decode_workday_board(token)
+    api_root = f"https://{host}/wday/cxs/{urllib.parse.quote(tenant, safe='')}/{urllib.parse.quote(site, safe='-_')}"
+    postings: dict[str, dict[str, Any]] = {}
+
+    searches = [("", WORKDAY_RECENT_LIMIT)] + [
+        (term, WORKDAY_TARGETED_LIMIT) for term in WORKDAY_SEARCH_TERMS
+    ]
+    for search_text, result_limit in searches:
+        offset = 0
+        while offset < result_limit:
+            data = post_json(
+                f"{api_root}/jobs",
+                {"appliedFacets": {}, "limit": 20, "offset": offset, "searchText": search_text},
+            )
+            page = data.get("jobPostings", []) if isinstance(data, dict) else []
+            if not isinstance(page, list):
+                raise ValueError("Workday response did not contain a jobPostings list")
+            for item in page:
+                if not isinstance(item, dict):
+                    continue
+                external_path = str(item.get("externalPath", ""))
+                if not external_path:
+                    continue
+                saved = postings.setdefault(external_path, dict(item))
+                if search_text:
+                    saved["_targeted_match"] = True
+            total = int(data.get("total", len(page))) if isinstance(data, dict) else len(page)
+            offset += len(page)
+            if not page or offset >= total:
+                break
+
+    jobs = []
+    for external_path, item in postings.items():
+        title = clean_text(str(item.get("title", "")))
+        if not is_relevant(title):
+            continue
+        # The recent-board scan is intentionally cheap. Generic titles are only
+        # opened when Workday itself matched an early-career search phrase.
+        if not is_strict_early_career(title) and not item.get("_targeted_match"):
+            continue
+
+        public_url = f"https://{host}/{urllib.parse.quote(site, safe='-_')}{external_path}"
+        info: dict[str, Any] = {}
+        organization: dict[str, Any] = {}
+        try:
+            detail = fetch_json(f"{api_root}{external_path}")
+            if isinstance(detail, dict):
+                info_value = detail.get("jobPostingInfo") or {}
+                organization_value = detail.get("hiringOrganization") or {}
+                info = info_value if isinstance(info_value, dict) else {}
+                organization = organization_value if isinstance(organization_value, dict) else {}
+        except (urllib.error.URLError, TimeoutError, ValueError, OSError):
+            # A single expired or protected detail page should not discard the
+            # rest of a healthy Workday board. List metadata is still useful.
+            pass
+
+        if info.get("canApply") is False or info.get("posted") is False:
+            continue
+        time_type = clean_text(str(info.get("timeType") or item.get("timeType", ""))).lower()
+        if time_type and "full" not in time_type:
+            continue
+        location = clean_text(str(info.get("location") or item.get("locationsText", "")))
+        country = info.get("country") or {}
+        country_name = clean_text(str(country.get("descriptor", ""))) if isinstance(country, dict) else ""
+        if country_name and not is_us_location(location) and "united states" in country_name.lower():
+            location = f"{location}, United States".strip(", ")
+        description = str(info.get("jobDescription", ""))
+        company = fallback_company or clean_text(str(organization.get("name", ""))) or tenant
+        candidate = ats_job(
+            company=company,
+            title=clean_text(str(info.get("title") or title)),
+            location=location,
+            url=str(info.get("externalUrl") or public_url),
+            published=info.get("startDate") or info.get("postedOn") or item.get("postedOn"),
+            description=description,
+            source_name="Workday Direct",
+        )
+        if candidate:
+            jobs.append(candidate)
+    return jobs
+
+
 def fetch_direct_ats(curated_jobs: list[dict[str, Any]], settings: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]:
     boards = discover_ats_boards(curated_jobs)
     for seed in settings.get("deel_boards", []):
         token = clean_text(str(seed.get("slug", "")))
         if token:
             boards["deel"].setdefault(token, clean_text(str(seed.get("company", token))))
+    seeded_workday: dict[str, str] = {}
+    for seed in settings.get("workday_boards", []):
+        host = clean_text(str(seed.get("host", ""))).lower()
+        tenant = clean_text(str(seed.get("tenant", "")))
+        site = clean_text(str(seed.get("site", ""))).lower()
+        if host and tenant and site:
+            token = encode_workday_board(host, tenant, site)
+            seeded_workday[token] = clean_text(str(seed.get("company", tenant)))
+    # Explicit seeds are first so important boards cannot be pushed past the
+    # per-platform cap by the order of third-party discovery feeds.
+    boards["workday"] = {**seeded_workday, **boards["workday"]}
     max_boards = int(settings.get("max_boards_per_platform", 140))
     tasks = []
     for kind, tokens in boards.items():
-        for token, company in list(tokens.items())[:max_boards]:
+        kind_limit = int(settings.get(f"max_{kind}_boards", max_boards))
+        for token, company in list(tokens.items())[:kind_limit]:
             tasks.append((kind, token, company))
-    fetchers = {"greenhouse": fetch_greenhouse_board, "lever": fetch_lever_board, "ashby": fetch_ashby_board, "deel": fetch_deel_board}
+    fetchers = {
+        "greenhouse": fetch_greenhouse_board,
+        "lever": fetch_lever_board,
+        "ashby": fetch_ashby_board,
+        "deel": fetch_deel_board,
+        "workday": fetch_workday_board,
+    }
     jobs: list[dict[str, Any]] = []
     summaries = {kind: {"status": "ok", "jobs": 0, "boards": 0, "errors": 0} for kind in fetchers}
-    with ThreadPoolExecutor(max_workers=int(settings.get("max_workers", 12))) as executor:
+
+    def collect(selected_tasks: list[tuple[str, str, str]], max_workers: int) -> None:
+        if not selected_tasks:
+            return
+        executor = ThreadPoolExecutor(max_workers=max_workers)
         future_map = {
-            executor.submit(fetchers[kind], token, company): kind for kind, token, company in tasks
+            executor.submit(fetchers[kind], token, company): (kind, token)
+            for kind, token, company in selected_tasks
         }
-        for future in as_completed(future_map):
-            kind = future_map[future]
-            summaries[kind]["boards"] += 1
-            try:
-                found = future.result()
-                jobs.extend(found)
-                summaries[kind]["jobs"] += len(found)
-            except Exception:
-                summaries[kind]["errors"] += 1
-    labels = {"greenhouse": "Greenhouse Direct", "lever": "Lever Direct", "ashby": "Ashby Direct", "deel": "Deel Direct"}
+        try:
+            for future in as_completed(future_map):
+                kind, token = future_map[future]
+                summaries[kind]["boards"] += 1
+                try:
+                    found = future.result()
+                    jobs.extend(found)
+                    summaries[kind]["jobs"] += len(found)
+                except Exception as exc:
+                    summaries[kind]["errors"] += 1
+                    summaries[kind].setdefault("error_details", []).append(f"{token}: {str(exc)[:160]}")
+        finally:
+            executor.shutdown(wait=True)
+
+    collect([task for task in tasks if task[0] != "workday"], int(settings.get("max_workers", 12)))
+    collect([task for task in tasks if task[0] == "workday"], int(settings.get("workday_max_workers", 4)))
+    labels = {
+        "greenhouse": "Greenhouse Direct",
+        "lever": "Lever Direct",
+        "ashby": "Ashby Direct",
+        "deel": "Deel Direct",
+        "workday": "Workday Direct",
+    }
     results = {}
     for kind, summary in summaries.items():
         if summary["boards"] and summary["errors"] == summary["boards"]:
             summary["status"] = "error"
+        elif summary["errors"]:
+            summary["status"] = "degraded"
+        if "error_details" in summary:
+            summary["error_details"] = summary["error_details"][:10]
         results[labels[kind]] = summary
     return jobs, results
 
@@ -733,11 +929,48 @@ def is_aggregator_url(url: str) -> bool:
     return "linkedin.com" in host or any(aggregator in host for aggregator in AGGREGATOR_HOSTS)
 
 
+def workday_requisition_key(url: str) -> str:
+    board = workday_board_from_url(url)
+    if not board:
+        return ""
+    path = urllib.parse.urlsplit(url).path.rstrip("/")
+    final_part = urllib.parse.unquote(path.rsplit("/", 1)[-1])
+    requisition = final_part.rsplit("_", 1)[-1]
+    if not any(character.isdigit() for character in requisition):
+        return ""
+    _, tenant, _ = board
+    return f"{tenant.lower()}:{requisition.upper()}"
+
+
+def has_direct_source(job: dict[str, Any], source: str = "Workday Direct") -> bool:
+    return source in job.get("sources", [])
+
+
+def should_fuzzy_merge(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    if not same_listing(left, right):
+        return False
+    if is_aggregator_url(left["url"]) or is_aggregator_url(right["url"]):
+        return True
+    left_board = workday_board_from_url(left["url"])
+    right_board = workday_board_from_url(right["url"])
+    # Reconcile a curated, possibly stale Workday alias with the verified live
+    # board result. Two independently live requisitions remain separate.
+    return bool(
+        left_board and right_board and left_board == right_board
+        and has_direct_source(left) != has_direct_source(right)
+    )
+
+
 def merge_job_fields(existing: dict[str, Any], job: dict[str, Any], visa_rank: dict[str, int]) -> None:
     sources = sorted(set(existing["sources"] + job["sources"]))
     details = [value for value in (existing.get("source_detail"), job.get("source_detail")) if value]
-    if is_aggregator_url(existing["url"]) and not is_aggregator_url(job["url"]):
-        for key in ("company", "title", "location", "url", "salary", "category"):
+    prefer_employer = is_aggregator_url(existing["url"]) and not is_aggregator_url(job["url"])
+    prefer_verified_workday = has_direct_source(job) and not has_direct_source(existing)
+    if prefer_employer or prefer_verified_workday:
+        keys = ["company", "title", "location", "salary", "category"]
+        if not workday_requisition_key(existing["url"]) or workday_requisition_key(existing["url"]) != workday_requisition_key(job["url"]):
+            keys.append("url")
+        for key in keys:
             existing[key] = job.get(key, existing.get(key))
     existing["sources"] = sources
     existing["source_detail"] = " • ".join(dict.fromkeys(details))
@@ -755,21 +988,71 @@ def merge_job_fields(existing: dict[str, Any], job: dict[str, Any], visa_rank: d
 def merge_jobs(jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     merged: list[dict[str, Any]] = []
     by_id: dict[str, dict[str, Any]] = {}
+    by_requisition: dict[str, dict[str, Any]] = {}
     by_title: dict[str, list[dict[str, Any]]] = {}
-    visa_rank = {"Unknown": 0, "No / restricted": 1, "Likely — history": 2, "Yes — explicit": 3}
+    visa_rank = {
+        "Unknown": 0,
+        "No / restricted": 1,
+        "Likely — history": 2,
+        "Likely — third-party": 2,
+        "Yes — explicit": 3,
+    }
     for job in jobs:
         existing = by_id.get(job["id"])
+        requisition_key = workday_requisition_key(job["url"])
+        if not existing and requisition_key:
+            existing = by_requisition.get(requisition_key)
         if not existing:
-            existing = next((candidate for candidate in by_title.get(listing_title_key(job["title"]), []) if same_listing(candidate, job)), None)
+            existing = next(
+                (candidate for candidate in by_title.get(listing_title_key(job["title"]), []) if should_fuzzy_merge(candidate, job)),
+                None,
+            )
         if not existing:
             merged.append(job)
             by_id[job["id"]] = job
+            if requisition_key:
+                by_requisition[requisition_key] = job
             by_title.setdefault(listing_title_key(job["title"]), []).append(job)
             continue
         merge_job_fields(existing, job, visa_rank)
+        if requisition_key:
+            by_requisition[requisition_key] = existing
+    stale_aliases: set[int] = set()
+    verified_workday = [job for job in merged if has_direct_source(job)]
+    for verified in verified_workday:
+        verified_board = workday_board_from_url(verified["url"])
+        for candidate in merged:
+            if candidate is verified or has_direct_source(candidate) or id(candidate) in stale_aliases:
+                continue
+            if verified_board and workday_board_from_url(candidate["url"]) == verified_board and same_listing(verified, candidate):
+                merge_job_fields(verified, candidate, visa_rank)
+                stale_aliases.add(id(candidate))
+    if stale_aliases:
+        merged = [job for job in merged if id(job) not in stale_aliases]
     for job in merged:
         job["id"] = make_id(job["url"], job["company"], job["title"], job["location"])
     return merged
+
+
+def apply_visa_signals(jobs: list[dict[str, Any]], signals: list[dict[str, Any]]) -> None:
+    for signal in signals:
+        signal_company = company_key(clean_text(str(signal.get("company", ""))))
+        signal_title = listing_title_key(clean_text(str(signal.get("title", ""))))
+        signal_requisition = clean_text(str(signal.get("requisition", ""))).upper()
+        for job in jobs:
+            if signal_company and company_key(job["company"]) != signal_company:
+                continue
+            if signal_title and listing_title_key(job["title"]) != signal_title:
+                continue
+            if signal_requisition:
+                requisition_key = workday_requisition_key(job["url"])
+                if not requisition_key.endswith(f":{signal_requisition}"):
+                    continue
+            job["visa_status"] = "Likely — third-party"
+            job["visa_evidence"] = clean_text(str(signal.get("evidence", "")))
+            source = clean_text(str(signal.get("source", "Third-party visa signal")))
+            if source:
+                job["sources"] = sorted(set(job.get("sources", []) + [f"{source} visa signal"]))
 
 
 def fetch_all(sources: list[dict[str, Any]], direct_ats: dict[str, Any] | None = None) -> FetchResult:
@@ -792,7 +1075,11 @@ def fetch_all(sources: list[dict[str, Any]], direct_ats: dict[str, Any] | None =
             if source["kind"] == "h1b":
                 for job in parsed:
                     sponsor_companies[company_key(job["company"])] = job["visa_status"]
-            results[source["name"]] = {"status": "ok", "jobs": len(parsed), "homepage": source.get("homepage", "")}
+            results[source["name"]] = {
+                "status": "ok" if parsed else "empty",
+                "jobs": len(parsed),
+                "homepage": source.get("homepage", ""),
+            }
         except (urllib.error.URLError, TimeoutError, ValueError, OSError) as exc:
             results[source["name"]] = {"status": "error", "jobs": 0, "error": str(exc)[:300], "homepage": source.get("homepage", "")}
 
@@ -805,4 +1092,7 @@ def fetch_all(sources: list[dict[str, Any]], direct_ats: dict[str, Any] | None =
         if job["visa_status"] == "Unknown" and company_key(job["company"]) in sponsor_companies:
             job["visa_status"] = "Likely — history"
             job["visa_evidence"] = "The employer appears in Jobright's recent H-1B sponsorship-history feed. Confirm sponsorship for this specific role."
-    return FetchResult(merge_jobs(all_jobs), results)
+    merged = merge_jobs(all_jobs)
+    if direct_ats:
+        apply_visa_signals(merged, direct_ats.get("visa_signals", []))
+    return FetchResult(merged, results)

@@ -1,5 +1,6 @@
 {
   "refresh_hour_local": 8,
+  "public_snapshot_url": "https://deep-nayak007.github.io/new-grad-job-scout/data/jobs.json",
   "sources": [
     {
       "name": "Keryx 2027",
@@ -72,11 +73,31 @@
   "direct_ats": {
     "enabled": true,
     "max_workers": 12,
+    "workday_max_workers": 4,
     "max_boards_per_platform": 140,
+    "max_workday_boards": 250,
     "deel_boards": [
       {
         "slug": "spiderrock-technology-solutions-llc",
         "company": "SpiderRock Technology Solutions LLC"
+      }
+    ],
+    "workday_boards": [
+      {
+        "host": "micron.wd1.myworkdayjobs.com",
+        "tenant": "micron",
+        "site": "external",
+        "company": "Micron Technology"
+      }
+    ],
+    "visa_signals": [
+      {
+        "company": "Micron Technology",
+        "title": "New College Grad - IT Software Support Engineer",
+        "requisition": "JR111038",
+        "source": "Avisa",
+        "url": "https://avisajob.com/jobs/1789048975848",
+        "evidence": "Avisa labels this role visa-sponsored; Micron's official posting does not confirm sponsorship. Verify eligibility with the recruiter."
       }
     ]
   }
