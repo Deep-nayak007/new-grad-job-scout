@@ -88,6 +88,12 @@
         "tenant": "micron",
         "site": "external",
         "company": "Micron Technology"
+      },
+      {
+        "host": "capitalone.wd12.myworkdayjobs.com",
+        "tenant": "capitalone",
+        "site": "capital_one",
+        "company": "Capital One"
       }
     ],
     "visa_signals": [

@@ -8,6 +8,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
 
+from .sources import merge_visa
+
 
 class Database:
     def __init__(self, path: Path):
@@ -46,6 +48,7 @@ class Database:
                     grad_2027 INTEGER NOT NULL DEFAULT 0,
                     visa_status TEXT NOT NULL DEFAULT 'Unknown',
                     visa_evidence TEXT NOT NULL DEFAULT '',
+                    visa_basis TEXT NOT NULL DEFAULT 'unknown',
                     first_seen TEXT NOT NULL,
                     last_seen TEXT NOT NULL,
                     status TEXT NOT NULL DEFAULT 'Not applied',
@@ -73,6 +76,9 @@ class Database:
                 );
                 """
             )
+            columns = {row["name"] for row in db.execute("PRAGMA table_info(jobs)")}
+            if "visa_basis" not in columns:
+                db.execute("ALTER TABLE jobs ADD COLUMN visa_basis TEXT NOT NULL DEFAULT 'unknown'")
             db.commit()
 
     def get_setting(self, key: str, default: str | None = None) -> str | None:
@@ -136,17 +142,33 @@ class Database:
         now = datetime.now().astimezone().isoformat(timespec="seconds")
         new_count = 0
         with self._write_lock, self.connect() as db:
-            existing = {row["id"] for row in db.execute("SELECT id FROM jobs")}
-            for job in jobs:
-                if job["id"] not in existing:
+            existing = {
+                row["id"]: dict(row)
+                for row in db.execute(
+                    "SELECT id, visa_status, visa_evidence, visa_basis, sources FROM jobs"
+                )
+            }
+            for original_job in jobs:
+                job = dict(original_job)
+                prior = existing.get(job["id"])
+                if prior is None:
                     new_count += 1
+                else:
+                    try:
+                        prior["sources"] = json.loads(prior.get("sources", "[]"))
+                    except (json.JSONDecodeError, TypeError):
+                        prior["sources"] = []
+                    merge_visa(prior, job, prefer_incoming_on_equal=True)
+                    job["visa_status"] = prior["visa_status"]
+                    job["visa_evidence"] = prior["visa_evidence"]
+                    job["visa_basis"] = prior["visa_basis"]
                 db.execute(
                     """
                     INSERT INTO jobs (
                         id, company, title, location, url, posted_date, age_text, salary,
                         sources, source_detail, category, grad_2027, visa_status, visa_evidence,
-                        first_seen, last_seen
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        visa_basis, first_seen, last_seen
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(id) DO UPDATE SET
                         company = excluded.company,
                         title = excluded.title,
@@ -159,14 +181,9 @@ class Database:
                         source_detail = excluded.source_detail,
                         category = excluded.category,
                         grad_2027 = MAX(jobs.grad_2027, excluded.grad_2027),
-                        visa_status = CASE
-                            WHEN excluded.visa_status LIKE 'Yes%' THEN excluded.visa_status
-                            WHEN jobs.visa_status LIKE 'Yes%' THEN jobs.visa_status
-                            WHEN excluded.visa_status LIKE 'Likely%' THEN excluded.visa_status
-                            ELSE jobs.visa_status END,
-                        visa_evidence = CASE
-                            WHEN excluded.visa_evidence != '' THEN excluded.visa_evidence
-                            ELSE jobs.visa_evidence END,
+                        visa_status = excluded.visa_status,
+                        visa_evidence = excluded.visa_evidence,
+                        visa_basis = excluded.visa_basis,
                         last_seen = excluded.last_seen
                     """,
                     (
@@ -175,7 +192,7 @@ class Database:
                         job.get("salary", ""), json.dumps(job.get("sources", [])),
                         job.get("source_detail", ""), job.get("category", "Other"),
                         int(job.get("grad_2027", False)), job.get("visa_status", "Unknown"),
-                        job.get("visa_evidence", ""), now, now,
+                        job.get("visa_evidence", ""), job.get("visa_basis", "unknown"), now, now,
                     ),
                 )
             db.commit()
@@ -267,4 +284,3 @@ class Database:
                 """
             ).fetchone()
             return {key: int(row[key] or 0) for key in row.keys()}
-

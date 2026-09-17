@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from .exporter import create_workbook
-from .sources import company_key, fetch_all, listing_title_key, workday_requisition_key
+from .sources import company_key, fetch_all, listing_title_key, merge_visa, workday_requisition_key
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -86,6 +86,19 @@ def apply_snapshot_history(
             if current_signatures[signature] == 1:
                 prior = unique_previous.get(signature)
         if prior:
+            resolved_visa = {
+                "visa_status": prior.get("visa_status", "Unknown"),
+                "visa_evidence": prior.get("visa_evidence", ""),
+                "visa_basis": prior.get("visa_basis", ""),
+                "sources": prior.get("sources", []),
+            }
+            # Current evidence replaces equally authoritative prior evidence,
+            # while a transient feed/detail failure cannot erase a stronger
+            # previously verified employer statement.
+            merge_visa(resolved_visa, job, prefer_incoming_on_equal=True)
+            job["visa_status"] = resolved_visa["visa_status"]
+            job["visa_evidence"] = resolved_visa["visa_evidence"]
+            job["visa_basis"] = resolved_visa["visa_basis"]
             first_seen = str(prior.get("first_seen") or prior.get("last_seen") or now)
             if legacy_reset_snapshot:
                 posted_date = str(prior.get("posted_date") or "")

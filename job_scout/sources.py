@@ -20,12 +20,20 @@ from typing import Any
 LINK_RE = re.compile(r"\[([^\]]*)\]\((https?://[^\s)]+(?:\)[^\s)]*)?)\)|href=[\"'](https?://[^\"']+)", re.I)
 TAG_RE = re.compile(r"<[^>]+>")
 TRACKING_KEYS = {"ref", "source", "src", "gh_src", "lever-source", "jr_id", "trk", "trackingid"}
-NEGATIVE_VISA_MARKERS = ("🛂", "🇺🇸", "does not sponsor", "no sponsorship", "without sponsorship")
-SENIOR_MARKERS = ("senior", "staff", "principal", "manager", "director", "lead ", "architect", "sr.", "sr ")
+NEGATIVE_VISA_MARKERS = (
+    "🛂", "🇺🇸", "does not sponsor", "will not sponsor", "no sponsorship",
+    "without sponsorship",
+)
+SENIOR_TITLE_RE = re.compile(r"\b(?:senior|staff|principal|manager|director|lead|architect|sr\.?)\b", re.I)
 EARLY_MARKERS = (
     "new grad", "new graduate", "graduate", "entry level", "entry-level", "junior", "associate",
     "early career", "college grad", "university grad", "engineer i", "engineer 1", "developer i",
     "analyst i", "2027", "2026", "amts", "development program", "rotation program",
+)
+EXPLICIT_EARLY_MARKERS = (
+    "new grad", "new graduate", "graduate", "entry level", "entry-level", "junior",
+    "early career", "college grad", "university grad", "amts", "development program",
+    "rotation program",
 )
 ROLE_MARKERS = (
     "software", "developer", "data", "machine learning", "artificial intelligence", " ai ", " ml ",
@@ -57,6 +65,13 @@ WORKDAY_HOST_SUFFIX = ".myworkdayjobs.com"
 WORKDAY_RECENT_LIMIT = 20
 WORKDAY_TARGETED_LIMIT = 20
 WORKDAY_SEARCH_TERMS = ("new college grad", "new grad", "early career", "entry level", "2027")
+VISA_BASIS_RANK = {
+    "unknown": 0,
+    "history": 1,
+    "third_party_exact": 2,
+    "job_specific": 3,
+    "direct": 4,
+}
 
 
 @dataclass
@@ -74,6 +89,59 @@ def clean_text(value: str) -> str:
     value = html.unescape(value)
     value = value.replace("**", "").replace("__", "").replace("↳", "")
     return re.sub(r"\s+", " ", value).strip(" |\t\n")
+
+
+def infer_visa_basis(job: dict[str, Any]) -> str:
+    """Return the authority behind a visa claim, including legacy snapshots."""
+    explicit = clean_text(str(job.get("visa_basis", ""))).lower()
+    status = clean_text(str(job.get("visa_status", "Unknown")))
+    # Migrated databases use "unknown" as the column default. Infer authority
+    # from their pre-migration evidence when a real status already exists.
+    if explicit in VISA_BASIS_RANK and (explicit != "unknown" or status == "Unknown"):
+        return explicit
+    if status == "Unknown":
+        return "unknown"
+    evidence = clean_text(str(job.get("visa_evidence", ""))).lower()
+    sources = " ".join(str(value) for value in job.get("sources", [])).lower()
+    if "employer description" in evidence or (
+        "direct" in sources and (status.startswith("No") or status.startswith("Yes"))
+    ):
+        return "direct"
+    if "jobright reports" in evidence and "explicit" in evidence:
+        return "job_specific"
+    if status.startswith("Likely — third-party") or "visa signal" in sources:
+        return "third_party_exact"
+    if status.startswith("Likely"):
+        return "history"
+    return "job_specific"
+
+
+def merge_visa(
+    existing: dict[str, Any], incoming: dict[str, Any], *, prefer_incoming_on_equal: bool = False,
+) -> None:
+    """Atomically merge status, evidence, and authority without losing stronger evidence."""
+    existing_basis = infer_visa_basis(existing)
+    incoming_basis = infer_visa_basis(incoming)
+    existing_status = clean_text(str(existing.get("visa_status", "Unknown"))) or "Unknown"
+    incoming_status = clean_text(str(incoming.get("visa_status", "Unknown"))) or "Unknown"
+    existing["visa_basis"] = existing_basis
+
+    use_incoming = VISA_BASIS_RANK[incoming_basis] > VISA_BASIS_RANK[existing_basis]
+    if VISA_BASIS_RANK[incoming_basis] == VISA_BASIS_RANK[existing_basis]:
+        if prefer_incoming_on_equal:
+            use_incoming = True
+        else:
+            # Within one refresh, a role-level restriction is the conservative
+            # resolution when equally authoritative sources conflict.
+            status_rank = lambda value: 3 if value.startswith("No") else 2 if value.startswith("Yes") else 1 if value.startswith("Likely") else 0
+            use_incoming = status_rank(incoming_status) > status_rank(existing_status)
+            if incoming_status == existing_status and not existing.get("visa_evidence") and incoming.get("visa_evidence"):
+                use_incoming = True
+
+    if use_incoming:
+        existing["visa_status"] = incoming_status
+        existing["visa_evidence"] = clean_text(str(incoming.get("visa_evidence", "")))
+        existing["visa_basis"] = incoming_basis
 
 
 def extract_links(value: str) -> list[str]:
@@ -184,16 +252,21 @@ def is_relevant(title: str) -> bool:
         return False
     if not any(token in value for token in ROLE_MARKERS):
         return False
-    if any(token in value for token in SENIOR_MARKERS) and not any(token in value for token in EARLY_MARKERS):
+    # "Associate" is common in genuinely senior finance titles such as
+    # "Principal Associate". Only explicit graduate wording can override a
+    # whole-word senior marker; weak signals such as Associate or Engineer I cannot.
+    if SENIOR_TITLE_RE.search(title) and not any(token in value for token in EXPLICIT_EARLY_MARKERS):
         return False
     return True
 
 
 def is_strict_early_career(title: str, description: str = "") -> bool:
     title_value = f" {title.lower()} "
+    if SENIOR_TITLE_RE.search(title) and not any(marker in title_value for marker in EXPLICIT_EARLY_MARKERS):
+        return False
     unambiguous_markers = tuple(
         marker for marker in EARLY_MARKERS
-        if marker not in {"engineer i", "engineer 1", "developer i", "analyst i"}
+        if marker not in {"associate", "engineer i", "engineer 1", "developer i", "analyst i"}
     )
     if any(marker in title_value for marker in unambiguous_markers):
         return True
@@ -373,25 +446,31 @@ def normalize_row(row: dict[str, Any], source: dict[str, Any]) -> dict[str, Any]
 
     visa_status = "Unknown"
     visa_evidence = ""
+    visa_basis = "unknown"
     combined_raw = f"{raw} {title_raw}".lower()
     if any(marker.lower() in combined_raw for marker in NEGATIVE_VISA_MARKERS):
         visa_status = "No / restricted"
         visa_evidence = "Listing is marked as not sponsoring or requiring U.S. work authorization."
+        visa_basis = "job_specific"
 
     if source["kind"] == "h1b":
         if level and not any(marker in f" {title.lower()} {level.lower()} " for marker in EARLY_MARKERS):
             return None
-        h1b = first_value(row, ("h1b status", "h1b", "visa"))
-        if "🏅" in h1b or "🏅" in raw:
-            visa_status = "Yes — explicit"
-            visa_evidence = "Jobright reports that sponsorship is explicitly mentioned in the job description. Verify on the employer posting."
-        else:
-            visa_status = "Likely — history"
-            visa_evidence = "Jobright reports recent sponsorship history for this employer/category. This is not a guarantee."
+        if visa_status == "Unknown":
+            h1b = first_value(row, ("h1b status", "h1b", "visa"))
+            if "🏅" in h1b or "🏅" in raw:
+                visa_status = "Yes — explicit"
+                visa_evidence = "Jobright reports that sponsorship is explicitly mentioned in the job description. Verify on the employer posting."
+                visa_basis = "job_specific"
+            else:
+                visa_status = "Likely — history"
+                visa_evidence = "Jobright reports recent sponsorship history for this employer/category. This is not a guarantee."
+                visa_basis = "history"
     visa_cell = clean_text(first_value(row, ("visa", "h1b status", "h1b")))
     if visa_status == "Unknown" and "h-1b co" in visa_cell.lower():
         visa_status = "Likely — history"
         visa_evidence = "The source marks this employer as an H-1B sponsor. Confirm sponsorship for this specific role."
+        visa_basis = "history"
 
     return {
         "id": make_id(url, company, title, location),
@@ -408,6 +487,7 @@ def normalize_row(row: dict[str, Any], source: dict[str, Any]) -> dict[str, Any]
         "grad_2027": looks_2027(title, eligibility, source["name"]),
         "visa_status": visa_status,
         "visa_evidence": visa_evidence,
+        "visa_basis": visa_basis,
     }
 
 
@@ -496,6 +576,7 @@ def ats_job(
     if not is_us_location(location):
         return None
     visa_status, visa_evidence = visa_from_description(description)
+    visa_basis = "direct" if visa_status != "Unknown" else "unknown"
     posted_date = parse_iso_date(published)
     return {
         "id": make_id(url, company, title, location),
@@ -512,6 +593,7 @@ def ats_job(
         "grad_2027": looks_2027(title, description, ""),
         "visa_status": visa_status,
         "visa_evidence": visa_evidence,
+        "visa_basis": visa_basis,
     }
 
 
@@ -546,6 +628,7 @@ def parse_radar_jobs(text: str, source: dict[str, Any]) -> list[dict[str, Any]]:
         if "citizenship" in sponsorship or "does not sponsor" in sponsorship:
             candidate["visa_status"] = "No / restricted"
             candidate["visa_evidence"] = "The discovery feed marks this listing as requiring U.S. citizenship or not sponsoring. Verify with the employer."
+            candidate["visa_basis"] = "job_specific"
         jobs.append(candidate)
     return jobs
 
@@ -961,7 +1044,7 @@ def should_fuzzy_merge(left: dict[str, Any], right: dict[str, Any]) -> bool:
     )
 
 
-def merge_job_fields(existing: dict[str, Any], job: dict[str, Any], visa_rank: dict[str, int]) -> None:
+def merge_job_fields(existing: dict[str, Any], job: dict[str, Any]) -> None:
     sources = sorted(set(existing["sources"] + job["sources"]))
     details = [value for value in (existing.get("source_detail"), job.get("source_detail")) if value]
     prefer_employer = is_aggregator_url(existing["url"]) and not is_aggregator_url(job["url"])
@@ -980,9 +1063,7 @@ def merge_job_fields(existing: dict[str, Any], job: dict[str, Any], visa_rank: d
     if not existing.get("posted_date") or (job.get("posted_date") and job["posted_date"] > existing["posted_date"]):
         existing["posted_date"] = job.get("posted_date")
         existing["age_text"] = job.get("age_text", "")
-    if visa_rank.get(job["visa_status"], 0) > visa_rank.get(existing["visa_status"], 0):
-        existing["visa_status"] = job["visa_status"]
-        existing["visa_evidence"] = job["visa_evidence"]
+    merge_visa(existing, job)
 
 
 def merge_jobs(jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -990,13 +1071,6 @@ def merge_jobs(jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     by_id: dict[str, dict[str, Any]] = {}
     by_requisition: dict[str, dict[str, Any]] = {}
     by_title: dict[str, list[dict[str, Any]]] = {}
-    visa_rank = {
-        "Unknown": 0,
-        "No / restricted": 1,
-        "Likely — history": 2,
-        "Likely — third-party": 2,
-        "Yes — explicit": 3,
-    }
     for job in jobs:
         existing = by_id.get(job["id"])
         requisition_key = workday_requisition_key(job["url"])
@@ -1014,7 +1088,7 @@ def merge_jobs(jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 by_requisition[requisition_key] = job
             by_title.setdefault(listing_title_key(job["title"]), []).append(job)
             continue
-        merge_job_fields(existing, job, visa_rank)
+        merge_job_fields(existing, job)
         if requisition_key:
             by_requisition[requisition_key] = existing
     stale_aliases: set[int] = set()
@@ -1025,7 +1099,7 @@ def merge_jobs(jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
             if candidate is verified or has_direct_source(candidate) or id(candidate) in stale_aliases:
                 continue
             if verified_board and workday_board_from_url(candidate["url"]) == verified_board and same_listing(verified, candidate):
-                merge_job_fields(verified, candidate, visa_rank)
+                merge_job_fields(verified, candidate)
                 stale_aliases.add(id(candidate))
     if stale_aliases:
         merged = [job for job in merged if id(job) not in stale_aliases]
@@ -1048,8 +1122,12 @@ def apply_visa_signals(jobs: list[dict[str, Any]], signals: list[dict[str, Any]]
                 requisition_key = workday_requisition_key(job["url"])
                 if not requisition_key.endswith(f":{signal_requisition}"):
                     continue
-            job["visa_status"] = "Likely — third-party"
-            job["visa_evidence"] = clean_text(str(signal.get("evidence", "")))
+            signal_job = {
+                "visa_status": clean_text(str(signal.get("status", "Likely — third-party"))),
+                "visa_evidence": clean_text(str(signal.get("evidence", ""))),
+                "visa_basis": clean_text(str(signal.get("basis", "third_party_exact"))),
+            }
+            merge_visa(job, signal_job)
             source = clean_text(str(signal.get("source", "Third-party visa signal")))
             if source:
                 job["sources"] = sorted(set(job.get("sources", []) + [f"{source} visa signal"]))
@@ -1074,7 +1152,8 @@ def fetch_all(sources: list[dict[str, Any]], direct_ats: dict[str, Any] | None =
             all_jobs.extend(parsed)
             if source["kind"] == "h1b":
                 for job in parsed:
-                    sponsor_companies[company_key(job["company"])] = job["visa_status"]
+                    if job["visa_status"].startswith(("Yes", "Likely")):
+                        sponsor_companies[company_key(job["company"])] = job["visa_status"]
             results[source["name"]] = {
                 "status": "ok" if parsed else "empty",
                 "jobs": len(parsed),
@@ -1092,6 +1171,7 @@ def fetch_all(sources: list[dict[str, Any]], direct_ats: dict[str, Any] | None =
         if job["visa_status"] == "Unknown" and company_key(job["company"]) in sponsor_companies:
             job["visa_status"] = "Likely — history"
             job["visa_evidence"] = "The employer appears in Jobright's recent H-1B sponsorship-history feed. Confirm sponsorship for this specific role."
+            job["visa_basis"] = "history"
     merged = merge_jobs(all_jobs)
     if direct_ats:
         apply_visa_signals(merged, direct_ats.get("visa_signals", []))
