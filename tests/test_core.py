@@ -303,5 +303,25 @@ class DatabaseTests(unittest.TestCase):
             self.assertEqual(stored["visa_basis"], "direct")
 
 
+class FrontendTests(unittest.TestCase):
+    def test_show_more_control_advances_and_hides_reliably(self):
+        root = Path(__file__).resolve().parents[1]
+        for filename in ("app.js", "index.html", "styles.css"):
+            self.assertEqual(
+                (root / "static" / filename).read_text(encoding="utf-8"),
+                (root / "docs" / filename).read_text(encoding="utf-8"),
+                f"Published {filename} must match its source asset",
+            )
+        script = (root / "static" / "app.js").read_text(encoding="utf-8")
+        markup = (root / "static" / "index.html").read_text(encoding="utf-8")
+        styles = (root / "static" / "styles.css").read_text(encoding="utf-8")
+        self.assertIn("function showMoreJobs()", script)
+        self.assertIn('state.visible = Math.min(state.visible + PAGE_SIZE, jobs.length)', script)
+        self.assertIn('firstNewRow.scrollIntoView', script)
+        self.assertIn('addEventListener("click", showMoreJobs)', script)
+        self.assertIn('type="button" aria-controls="jobRows"', markup)
+        self.assertIn(".load-more[hidden] { display: none; }", styles)
+
+
 if __name__ == "__main__":
     unittest.main()

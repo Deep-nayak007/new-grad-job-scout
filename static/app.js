@@ -1,6 +1,7 @@
 const STATIC_MODE = location.hostname.endsWith("github.io") || location.protocol === "file:" || new URLSearchParams(location.search).has("static") || Boolean(window.JOB_SCOUT_STATIC);
+const PAGE_SIZE = 50;
 const state = {
-  jobs: [], visible: 50, tab: "all", loading: true,
+  jobs: [], visible: PAGE_SIZE, tab: "all", loading: true,
   lastRefreshId: Number(localStorage.getItem("lastRefreshId") || 0),
   loadedDataRefreshId: 0,
   lastVisitAt: localStorage.getItem("jobScoutLastVisit") || "",
@@ -111,10 +112,17 @@ function filteredJobs() {
 function renderJobs() {
   const jobs = filteredJobs();
   const shown = jobs.slice(0, state.visible);
-  $("#resultCount").textContent = `${jobs.length.toLocaleString()} matching role${jobs.length === 1 ? "" : "s"}`;
+  $("#resultCount").textContent = jobs.length
+    ? `Showing ${shown.length.toLocaleString()} of ${jobs.length.toLocaleString()} matching roles`
+    : "0 matching roles";
   $("#emptyState").hidden = jobs.length !== 0;
   $(".table-wrap").hidden = jobs.length === 0;
-  $("#loadMore").hidden = jobs.length <= state.visible;
+  const remaining = Math.max(0, jobs.length - shown.length);
+  const loadMore = $("#loadMore");
+  loadMore.hidden = remaining === 0;
+  loadMore.textContent = remaining
+    ? `Show ${Math.min(PAGE_SIZE, remaining).toLocaleString()} more roles (${remaining.toLocaleString()} remaining)`
+    : "All matching roles shown";
   const newCount = state.jobs.filter(isNewSinceVisit).length;
   $("#newTabCount").textContent = newCount ? ` (${newCount.toLocaleString()})` : "";
   $("#jobRows").innerHTML = shown.map(job => {
@@ -131,6 +139,20 @@ function renderJobs() {
       <td class="row-actions"><button class="save-button${job.saved ? " saved" : ""}" aria-label="${job.saved ? "Unsave" : "Save"} job" title="Save job">${job.saved ? "★" : "☆"}</button><a class="apply-button" href="${escapeHtml(job.url)}" target="_blank" rel="noopener">Apply ↗</a></td>
     </tr>`;
   }).join("");
+}
+
+function showMoreJobs() {
+  const jobs = filteredJobs();
+  const firstNewIndex = Math.min(state.visible, jobs.length);
+  if (firstNewIndex >= jobs.length) return;
+  state.visible = Math.min(state.visible + PAGE_SIZE, jobs.length);
+  renderJobs();
+  const firstNewRow = $$("#jobRows tr")[firstNewIndex];
+  if (firstNewRow) {
+    firstNewRow.tabIndex = -1;
+    firstNewRow.focus({preventScroll: true});
+    requestAnimationFrame(() => firstNewRow.scrollIntoView({behavior: "smooth", block: "start"}));
+  }
 }
 
 async function patchJob(id, changes) {
@@ -263,12 +285,12 @@ $("#alertButton").addEventListener("click", async () => {
 $$('.tab').forEach(tab => tab.addEventListener("click", () => {
   $$('.tab').forEach(item => item.classList.remove("active"));
   tab.classList.add("active");
-  state.tab = tab.dataset.tab; state.visible = 50; renderJobs();
+  state.tab = tab.dataset.tab; state.visible = PAGE_SIZE; renderJobs();
 }));
 ["#searchInput", "#categoryFilter", "#daysFilter", "#gradFilter"].forEach(selector => {
-  $(selector).addEventListener(selector === "#searchInput" ? "input" : "change", () => { state.visible = 50; renderJobs(); });
+  $(selector).addEventListener(selector === "#searchInput" ? "input" : "change", () => { state.visible = PAGE_SIZE; renderJobs(); });
 });
-$("#loadMore").addEventListener("click", () => { state.visible += 50; renderJobs(); });
+$("#loadMore").addEventListener("click", showMoreJobs);
 $("#jobRows").addEventListener("change", async event => {
   if (!event.target.matches(".status-select")) return;
   const id = event.target.closest("tr").dataset.id;

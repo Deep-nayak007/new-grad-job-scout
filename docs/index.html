@@ -13,7 +13,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="styles.css?v=20260917-show-more">
 </head>
 <body>
   <div class="ambient ambient-one"></div>
@@ -56,7 +56,7 @@
     <section class="workspace">
       <div class="section-heading">
         <div><p class="eyebrow">LIVE OPPORTUNITIES</p><h2>Your job board</h2></div>
-        <p id="resultCount" class="result-count">Loading roles…</p>
+        <p id="resultCount" class="result-count" aria-live="polite">Loading roles…</p>
       </div>
 
       <div class="tab-row" role="tablist">
@@ -81,7 +81,7 @@
         </table>
       </div>
       <div id="emptyState" class="empty-state" hidden><span>⌕</span><h3>No matching roles</h3><p>Try widening the posting date or clearing one of the filters.</p></div>
-      <button id="loadMore" class="load-more" hidden>Show more roles</button>
+      <button id="loadMore" class="load-more" type="button" aria-controls="jobRows" hidden>Show more roles</button>
     </section>
 
     <section class="search-hubs">
@@ -101,6 +101,6 @@
 
   <footer class="shell"><span>Job Scout refreshes daily in the cloud and on your computer.</span><span>Always confirm eligibility and sponsorship on the employer’s application page.</span></footer>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
-  <script src="app.js"></script>
+  <script src="app.js?v=20260917-show-more"></script>
 </body>
 </html>
